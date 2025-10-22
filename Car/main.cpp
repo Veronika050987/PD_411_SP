@@ -3,6 +3,9 @@
 #include<conio.h>
 #include<thread>
 #include<chrono>
+#include<cmath> // Для std::abs
+#include<string>
+#include <sstream>
 using namespace std::chrono_literals;
 using std::cin;
 using std::cout;
@@ -10,9 +13,24 @@ using std::endl;
 
 #define Enter 13
 #define Escape 27
+#define Forward 'W'
+#define Backward 'S'
+#define IncreaseSpeed 'D'
+#define DecreaseSpeed 'A'
+#define StartStop 'I'
+#define FillFuel 'F'
+#define GetIn 'G'
+#define GetOut 'O'
 
 #define MIN_TANK_VOLUME 25
 #define MAX_TANK_VOLUME 125
+
+const std::string ANSI_COLOR_RED = "\x1b[31m";
+const std::string ANSI_COLOR_GREEN = "\x1b[32m";
+const std::string ANSI_COLOR_BLUE = "\x1b[36m";
+const std::string ANSI_COLOR_ROSE = "\x1b[35m";
+const std::string ANSI_COLOR_RESET = "\x1b[0m";
+
 class Tank
 {
 	const int VOLUME;
@@ -48,11 +66,11 @@ public:
 	{
 		//this->VOLUME = volume;
 		this->fuel_level = 0;
-		cout << "Tank is ready:\t" << this << endl;
+		cout << ANSI_COLOR_GREEN << "Tank is ready:\t" << this << ANSI_COLOR_RESET << endl;
 	}
 	~Tank()
 	{
-		cout << "Tank is over:\t" << this << endl;
+		cout << ANSI_COLOR_RED << "Tank is over:\t" << this << ANSI_COLOR_RESET << endl;
 	}
 	void info()const
 	{
@@ -83,11 +101,11 @@ public:
 	{
 		consumption_per_second = CONSUMPTION * 3e-5;
 		is_started = false;
-		cout << "Engine is ready:\t" << this << endl;
+		cout << ANSI_COLOR_GREEN << "Engine is ready:\t" << this << ANSI_COLOR_RESET << endl;
 	}
 	~Engine()
 	{
-		cout << "Engine is over:\t" << this << endl;
+		cout << ANSI_COLOR_RED << "Engine is over:\t" << this << ANSI_COLOR_RESET << endl;
 	}
 	void start()
 	{
@@ -106,6 +124,12 @@ public:
 		cout << "Consumption per 100 km:\t" << CONSUMPTION << " liters.\n";
 		cout << "Consumption per 1 sec:\t" << get_consumption_per_second() << " liters.\n";
 	}
+	double get_fuel_consumption(int speed) const 
+	{
+		double base_consumption = consumption_per_second;
+		double speed_factor = speed / 100.0; // Нормализуем скорость
+		return base_consumption * (1 + speed_factor);
+	}
 };
 
 #define MAX_SPEED_LOWER_LIMIT 40
@@ -122,6 +146,11 @@ class Car
 		std::thread panel_thread;
 		std::thread engine_idle_thread;
 	}threads;
+	std::string movement_message;
+	bool is_moving_forward; 
+	bool is_moving_backward; 
+	bool is_accelerating;
+	bool is_decelerating;
 public:
 	Car(double consumption, int volume, int max_speed) :
 		engine(consumption),
@@ -132,45 +161,166 @@ public:
 			max_speed < MAX_SPEED_LOWER_LIMIT ? MAX_SPEED_LOWER_LIMIT:
 			max_speed < MAX_SPEED_UPPER_LIMIT ? MAX_SPEED_UPPER_LIMIT:
 			max_speed
-		)
+		),
+		is_moving_forward(false),
+		is_moving_backward(false),
+		is_accelerating(false),
+		is_decelerating(false),
+		driver_inside(false)
 	{
-		driver_inside = false;
-		cout << "Your car is ready:-)\t" << this << endl;
+		cout << ANSI_COLOR_GREEN << "Your car is ready:-)\t" << this << ANSI_COLOR_RESET << endl;
 	}
 	~Car()
 	{
-		cout << "Your car is over:-(\t" << this << endl;
+		cout << ANSI_COLOR_RED << "Your car is over:-(\t" << this << ANSI_COLOR_RESET << endl;
 
 	}
 	void get_in()
 	{
 		driver_inside = true;
-		//panel();
+		is_moving_forward = false;
+		is_moving_backward = false;
+		is_accelerating = false;
+		is_decelerating = false;
+		movement_message = "";
+		if (threads.panel_thread.joinable()) threads.panel_thread.join();
 		threads.panel_thread = std::thread(&Car::panel, this);
 	}
 	void get_out()
 	{
 		driver_inside = false;
 		if (threads.panel_thread.joinable())threads.panel_thread.join();
+		stop();
 		system("CLS");
-		cout << "Wall Street" << endl;
+		cout << ANSI_COLOR_BLUE <<"A LITTLE BIT OF FRESH AIR!!!" << ANSI_COLOR_RESET << endl;
 	}
 	void start()
 	{
-		if (driver_inside && tank.get_fuel_level())
+		if (driver_inside && tank.get_fuel_level() > 0)
 		{
 			engine.start();
-			threads.engine_idle_thread = std::thread(&Car::engine_idle, this);
+			if (!threads.engine_idle_thread.joinable()) 
+				threads.engine_idle_thread = std::thread(&Car::engine_idle, this);
+			cout << "Engine started." << endl;
 		}
+		else if (!driver_inside)
+			cout << ANSI_COLOR_RED << "You need to get in the car first!" << ANSI_COLOR_RESET << endl;
+		else
+			cout << ANSI_COLOR_RED << "Not enough fuel to start the engine!" << ANSI_COLOR_RESET << endl;
 	}
 	void stop()
 	{
 		engine.stop();
 		if (threads.engine_idle_thread.joinable())threads.engine_idle_thread.join();
+		speed = 0;
+		is_moving_forward = false;
+		is_moving_backward = false;
+		is_accelerating = false;
+		is_decelerating = false;
+		cout << ANSI_COLOR_RED << "Engine stopped." << ANSI_COLOR_RESET << endl;
+		movement_message = "";
+	}
+	void increase_speed() 
+	{
+		if (driver_inside && engine.started()) 
+		{
+			is_accelerating = true;
+			is_decelerating = false;
+			speed += 5;
+			if (speed > MAX_SPEED) speed = MAX_SPEED;
+			updateMovementMessage();
+			movement_message = "Forward. Speed: " + std::to_string(speed) + " km/h";
+		}
+		else if (!driver_inside) 
+			cout << "You need to get in the car first!" << endl;
+		else if (!engine.started()) 
+			cout << "Start the engine first!" << endl;
+	}
+
+	void decrease_speed() 
+	{
+		if (driver_inside) 
+		{
+			is_accelerating = false;
+			is_decelerating = true;
+			speed -= 5;
+			if (speed < 0) speed = 0;
+			updateMovementMessage();
+			movement_message = "Backward. Speed: " + std::to_string(speed) + " km/h";
+		}
+		else
+			cout << "You need to get in the car first!" << endl;
+	}
+	void toggle_move_forward() 
+	{
+		if (driver_inside && engine.started()) 
+		{
+			is_moving_forward = !is_moving_forward; // Переключение состояния движения
+			is_moving_backward = false;
+			is_accelerating = false;
+			is_decelerating = false;
+			if (!is_moving_forward) 
+				speed = 0;
+			updateMovementMessage();
+		}
+		else 
+		{
+			if (!driver_inside) 
+				cout << "You need to get in the car first!" << endl;
+			else 
+				cout << "Start the engine first!" << endl;
+		}
+	}
+
+	void toggle_move_backward() 
+	{
+		if (driver_inside && engine.started()) 
+		{
+			is_moving_backward = !is_moving_backward;
+			is_moving_forward = false; // Ensure we're not going forward and backward at the same time
+			is_accelerating = false;
+			is_decelerating = false;
+			if (!is_moving_backward) 
+				speed = 0;
+			updateMovementMessage();
+		}
+		else 
+		{
+			if (!driver_inside) 
+				cout << "You need to get in the car first!" << endl;
+			else
+				cout << "Start the engine first!" << endl;
+		}
+	}
+	void updateMovementMessage() 
+	{
+		std::stringstream ss;
+		if (is_accelerating) 
+		{
+			ss << "Accelerating. Speed: " << speed << " km/h";
+		}
+		else if (is_decelerating) 
+		{
+			ss << "Decelerating. Speed: " << speed << " km/h";
+		}
+		else if (is_moving_forward) 
+		{
+			ss << "Moving Forward. Speed: " << speed << " km/h";
+		}
+		else if (is_moving_backward) 
+		{
+			ss << "Moving Backward. Speed: " << speed << " km/h";
+		}
+		else 
+		{
+			ss << "Stopped.";
+			speed = 0; // When not moving, set speed to 0
+		}
+		movement_message = ss.str();
 	}
 	void control()
 	{
-		cout << "Press 'Enter' to get in" << endl;
+		cout << ANSI_COLOR_BLUE << "Press 'Enter' to get in" << ANSI_COLOR_RESET << endl;
 		char key;
 		do
 		{
@@ -182,16 +332,34 @@ public:
 				if (driver_inside)get_out();
 				else get_in();
 				break;
-			case 'F':
+			case FillFuel:
 			case 'f':
 				double amount;
-				cout << "How much do you want? "; cin >> amount;
+				cout << ANSI_COLOR_ROSE << "How much do you want? "; cin >> amount;
+				cout << ANSI_COLOR_RESET;
 				tank.fill(amount);
+				cout << "Tank filled. Current level: " << tank.get_fuel_level() << endl;
 				break;
-			case'I'://ignition
+			case StartStop://ignition
 			case'i':
 				if (engine.started())stop();
 				else start();
+				break;
+			case Forward:
+			case 'w':
+				toggle_move_forward();
+				break;
+			case Backward:
+			case 's':
+				toggle_move_backward();
+				break;
+			case IncreaseSpeed:
+			case 'd':
+				increase_speed();
+				break;
+			case DecreaseSpeed:
+			case 'a':
+				decrease_speed();
 				break;
 			case Escape:
 				stop();
@@ -218,8 +386,16 @@ public:
 				cout << " LOW FUEL ";
 				SetConsoleTextAttribute(hConsole, 0x07);
 			}
+			else if (tank.get_fuel_level() > 5)
+			{
+				HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+				SetConsoleTextAttribute(hConsole, 0x2F);
+				cout << " ENOUGH FUEL ";
+				SetConsoleTextAttribute(hConsole, 0x07);
+			}
 			cout << endl;
-			cout << "Engine is " << (engine.started() ? "started" : "stopped") << endl;
+			cout << "Engine is " << (engine.started() ? "WRRROOOOOM-WRRROOOOOM started" : "stopped") << endl;
+			cout << movement_message << endl;
 			std::this_thread::sleep_for(100ms);
 		}
 	}
